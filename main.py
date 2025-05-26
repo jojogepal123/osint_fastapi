@@ -1,0 +1,137 @@
+import sys
+import os
+import logging
+import asyncio
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, EmailStr
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from fastapi.exception_handlers import request_validation_exception_handler
+# Import Telegram check function
+from telegram import check_telegram_number
+
+# Get absolute paths
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))  
+ZEHEF_PATH = os.path.join(BASE_DIR, "Zehef")
+
+
+# Configure Logging
+logging.basicConfig(
+    filename="app.log",
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)    
+app = FastAPI()
+
+# Mount the folder
+app.mount("/profile_photos", StaticFiles(directory="profile_photos"), name="profile_photos")
+# Request Model
+
+class EmailRequest(BaseModel):
+    email: EmailStr 
+
+class PhoneRequest(BaseModel):
+    phone : str
+
+# 🔹 **Zehef API**
+@app.post("/api/zehef/")
+async def search_zehef(request: EmailRequest):
+    """API Endpoint to check an email using Zehef"""
+
+    email = request.email.strip()
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required.")
+
+    ZEHEF_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Zehef")
+    sys.path.insert(0, ZEHEF_PATH)
+
+    try:
+        from lib.cli import parser  # Import here to avoid conflicts
+    except ImportError as e:
+        logging.critical(f"Failed to import Zehef parser: {e}")
+        return {"status": "error", "message": "Zehef parser not found."}
+
+    py_version = sys.version_info
+    py_require = (3, 10)
+
+    if py_version < py_require:
+        return {"status": "error", "message": f"Zehef doesn't work with Python versions lower than 3.10."}
+    
+    result = await parser(email)
+    return JSONResponse(status_code=200, content=result)
+
+# 🔹 **Telegram API**
+@app.post("/api/telegram/")
+async def search_telegram(request: PhoneRequest):
+    phone_number = request.phone.strip()
+    if not phone_number:
+        raise HTTPException(status_code=400, detail="Phone number is required.")
+
+    try:
+        result = await check_telegram_number(phone_number)
+        return JSONResponse(status_code=200, content=result)
+    except Exception as e:
+        logging.error(f"Telegram check failed for {phone_number}: {e}")
+        return {"status": "error", "message": "Failed to check Telegram number."}
+
+
+# 🔹 **Email Check API**
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    try:
+        body = await request.json()
+        email = body.get("email", "<no-email-provided>")
+    except Exception:
+        email = "<could-not-parse-body>"
+
+    logging.error(f"Validation error for email '{email}': {exc.errors()}")
+
+    # Return standard 422 response
+    return await request_validation_exception_handler(request, exc)
+
+@app.post("/api/holehe/")
+async def check_email(data: EmailRequest):
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "holehe", data.email,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await proc.communicate()
+
+        if proc.returncode != 0:
+            logging.error(f"Holehe error for email '{data.email}': {stderr.decode().strip()}")
+            raise HTTPException(status_code=500, detail=stderr.decode().strip())
+
+        output_lines = stdout.decode().strip().split("\n")
+        categories = {
+            "used": [],
+            "not used": [],
+            "rate limited": [],
+            "error": []
+        }
+
+        statuses = {
+            "[+]": "used",
+            "[-]": "not used",
+            "[x]": "rate limited",
+            "[!]": "error"
+        }
+
+        for line in output_lines:
+            for symbol, status in statuses.items():
+                if line.strip().startswith(symbol):
+                    service = line.split(symbol)[-1].strip()
+                    categories[status].append(service)
+                    break
+
+        # Log only email and status code
+        logging.info(f"holehe check success for '{data.email}' - Status Code: 200")
+
+        return JSONResponse(status_code=200, content=response_data)
+
+    except Exception as e:
+        logging.exception(f"Exception during holehe check for email '{data.email}': {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))

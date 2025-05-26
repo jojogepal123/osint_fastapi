@@ -1,0 +1,11 @@
+argparse
+httpx
+requests
+bs4
+asyncio
+holehe
+fastapi
+uvicorn
+pydantic[email] 
+telethon
+dotenv
