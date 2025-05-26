@@ -2,3 +2,6 @@
 /app.log
 /venv
 /__pycache__
+zehef.zip
+*.pyc
+*.cpython-313.pyc

@@ -9,7 +9,6 @@ from pydantic import BaseModel, EmailStr
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.exception_handlers import request_validation_exception_handler
-# Import Telegram check function
 from telegram import check_telegram_number
 
 # Get absolute paths
@@ -25,6 +24,9 @@ logging.basicConfig(
 )    
 app = FastAPI()
 
+if not os.path.exists("profile_photos"):
+    os.makedirs("profile_photos", exist_ok=True)
+
 # Mount the folder
 app.mount("/profile_photos", StaticFiles(directory="profile_photos"), name="profile_photos")
 # Request Model
@@ -35,7 +37,6 @@ class EmailRequest(BaseModel):
 class PhoneRequest(BaseModel):
     phone : str
 
-# 🔹 **Zehef API**
 @app.post("/api/zehef/")
 async def search_zehef(request: EmailRequest):
     """API Endpoint to check an email using Zehef"""
@@ -44,7 +45,6 @@ async def search_zehef(request: EmailRequest):
     if not email:
         raise HTTPException(status_code=400, detail="Email is required.")
 
-    ZEHEF_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Zehef")
     sys.path.insert(0, ZEHEF_PATH)
 
     try:
@@ -62,7 +62,10 @@ async def search_zehef(request: EmailRequest):
     result = await parser(email)
     return JSONResponse(status_code=200, content=result)
 
-# 🔹 **Telegram API**
+
+
+
+# 🔹 *Telegram API*
 @app.post("/api/telegram/")
 async def search_telegram(request: PhoneRequest):
     phone_number = request.phone.strip()
@@ -75,6 +78,7 @@ async def search_telegram(request: PhoneRequest):
     except Exception as e:
         logging.error(f"Telegram check failed for {phone_number}: {e}")
         return {"status": "error", "message": "Failed to check Telegram number."}
+
 
 
 # 🔹 **Email Check API**
@@ -124,13 +128,26 @@ async def check_email(data: EmailRequest):
             for symbol, status in statuses.items():
                 if line.strip().startswith(symbol):
                     service = line.split(symbol)[-1].strip()
-                    categories[status].append(service)
-                    break
+            
+                    if "gravatar.com" in service:
+                        categories[status].append("gravatar.com")
+                        break
+                    elif "twitter.com" in service:
+                        categories[status].append("X (Twitter)")
+                        break
+                    else:
+                        categories[status].append(service)
+                        break       
+
+
+        unwanted_line = "Email used, [-] Email not used, [x] Rate limit"
+        if unwanted_line in categories["used"]:
+             categories["used"].remove(unwanted_line)
 
         # Log only email and status code
         logging.info(f"holehe check success for '{data.email}' - Status Code: 200")
 
-        return JSONResponse(status_code=200, content=response_data)
+        return JSONResponse(status_code=200, content=categories)
 
     except Exception as e:
         logging.exception(f"Exception during holehe check for email '{data.email}': {str(e)}")
