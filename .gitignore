@@ -5,3 +5,6 @@
 zehef.zip
 *.pyc
 *.cpython-313.pyc
+/profile_photos
+/Zehef
+/session.session

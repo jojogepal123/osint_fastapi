@@ -1,5 +1,0 @@
-argparse
-httpx
-requests
-bs4
-asyncio
