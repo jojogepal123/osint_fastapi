@@ -204,7 +204,6 @@ async def email_scan(email):
             if os.path.exists(output_path):
                 os.remove(output_path)
 
-
 @app.post("/api/socialscan")
 async def handle_socialscan(request: EmailRequest):
     result = await email_scan(request.email)

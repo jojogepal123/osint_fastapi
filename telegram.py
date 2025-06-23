@@ -27,6 +27,7 @@ async def check_telegram_number(phone_number: str):
         profile_photo_path = None
         if user.photo:
             os.makedirs("profile_photos", exist_ok=True)
+            file_name = f"{user.id}.jpg"
             profile_photo_path = f"profile_photos/{user.id}.jpg"
             await client.download_profile_photo(user, file=profile_photo_path)
 
@@ -37,7 +38,7 @@ async def check_telegram_number(phone_number: str):
             "username": user.username,
             "user_id": user.id,
             "status": status,
-            "profile_photo": profile_photo_path,
+            "profile_photo": file_name if profile_photo_path else None,
         }
     else:
         return {"found": False}
