@@ -1,5 +1,5 @@
 import sys, uuid
-import os
+import os, requests
 import logging
 import asyncio
 from fastapi import FastAPI, HTTPException, Request
@@ -7,7 +7,6 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
 from fastapi.exception_handlers import request_validation_exception_handler
 from telegram import check_telegram_number
 from typing import List, Dict, Any, Optional
@@ -17,6 +16,7 @@ from ghunt_runner import GHuntRunner
 import pdfkit
 from pathlib import Path
 import json, tempfile
+import httpx
 
 # Get absolute paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))  
@@ -88,7 +88,6 @@ async def search_telegram(request: PhoneRequest):
     except Exception as e:
         logger.error(f"Telegram check failed for {phone_number}: {e}")
         return {"status": "error", "message": "Failed to check Telegram number."}
-
 
 
 # 🔹 **Email Check API**
@@ -167,10 +166,17 @@ async def check_email(data: EmailRequest):
 @app.post("/api/gmail")
 async def gmail_search(request: EmailRequest):
     result = await ghunt_runner.run_email_scan(request.email)
-
+    
     if "error" in result:
         logger.error(f"Error in gmail scan {result["error"]}")
         raise HTTPException(status_code=500,detail=result["error"])
+    
+    person_id = result.get("data", {}).get("PROFILE_CONTAINER", {}).get("profile", {}).get("personId")
+    # logger.info(f"Person ID found: {person_id}")
+    if person_id:
+        maps_result = await google_maps(GoogleMapsRequest(contributor_id=person_id))
+        result["maps_result"] = maps_result
+        
     return JSONResponse(status_code=200, content=result)
 
 async def email_scan(email):
@@ -213,3 +219,87 @@ async def handle_socialscan(request: EmailRequest):
         raise HTTPException(status_code=500,detail=result["error"])
     return JSONResponse(status_code=200, content=result)
 
+class PhoneIgRequest(BaseModel):
+    phone: str
+    country_code: str
+
+@app.post("/api/ignorant")
+async def ignorant_search(request: PhoneIgRequest):
+    phone = request.phone.strip()
+    country_code = request.country_code.strip()
+
+    if not phone or not country_code:
+        raise HTTPException(status_code=400, detail="Phone number and country code are required.")
+
+    try:
+        from ignorant.modules.shopping.amazon import amazon
+        from ignorant.modules.social_media.instagram import instagram
+        from ignorant.modules.social_media.snapchat import snapchat
+
+        out = []
+        async with httpx.AsyncClient() as client:
+            tasks = [
+                amazon(phone, country_code, client, out),
+                instagram(phone, country_code, client, out),
+                snapchat(phone, country_code, client, out),
+            ]
+            await asyncio.gather(*tasks)
+        return JSONResponse(status_code=200, content=out)
+    except Exception as e:
+        logger.error(f"Error in ignorant search for {phone}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+SERP_API_KEY = os.getenv("SERP_API_KEY")
+SERP_API_URL = os.getenv("SERP_API_URL")
+
+class GoogleMapsRequest(BaseModel):
+    contributor_id: str
+
+async def google_maps(request: GoogleMapsRequest):
+    if not request.contributor_id.strip():
+        raise HTTPException(status_code=400, detail="Contributor ID is required.")
+
+    if not SERP_API_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="SERPAPI_KEY is not configured on the server. Please set the environment variable."
+        )
+
+    url = SERP_API_URL
+    params = {
+        "engine": "google_maps_contributor_reviews",
+        "contributor_id": request.contributor_id,
+        "api_key": SERP_API_KEY,
+        "hl": "en",
+        "gl": "in",
+        "num": "100"
+    }
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, params=params)
+            response.raise_for_status()
+    except httpx.RequestError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Failed to fetch data from SerpApi: {e}"
+        )
+
+    data = response.json()
+    reviews_data = data.get("reviews", [])
+
+    extracted_reviews = []
+    for review in reviews_data:
+        place = review.get("place_info", {})
+        gps_coords = place.get("gps_coordinates", {})
+        extracted_reviews.append({
+            "name": place.get("title"),
+            "address": place.get("address"),
+            "latitude": gps_coords.get("latitude"),
+            "longitude": gps_coords.get("longitude"),
+            "date": review.get("date")
+        })
+    return {
+        "contributor_id": request.contributor_id,
+        "reviews": extracted_reviews
+    }
