@@ -8,7 +8,6 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr
 from fastapi.exceptions import RequestValidationError
 from fastapi.exception_handlers import request_validation_exception_handler
-from telegram import check_telegram_number
 from typing import List, Dict, Any, Optional
 from jinja2 import Template
 from openai import OpenAI
@@ -17,6 +16,8 @@ import pdfkit
 from pathlib import Path
 import json, tempfile
 import httpx
+# 🔹 Telegram imports (CORRECT)
+from telegram import start_client, stop_client, lookup_telegram_user
 
 # Get absolute paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))  
@@ -28,18 +29,38 @@ logging.basicConfig(
     filename="app.log",
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
-)    
+)  
+logging.getLogger("telethon").setLevel(logging.WARNING)  
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
+@app.on_event("startup")
+async def startup_event():
+    await start_client()
+    logger.info("Telegram client started")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    await stop_client()
+    logger.info("Telegram client stopped")
+
 ghunt_runner = GHuntRunner()
 
-if not os.path.exists("profile_photos"):
-    os.makedirs("profile_photos", exist_ok=True)
 
 # Mount the folder
-app.mount("/profile_photos", StaticFiles(directory="profile_photos"), name="profile_photos")
+# Mount Telegram photos folder
+if not os.path.exists("Telegram_photos"):
+    os.makedirs("Telegram_photos", exist_ok=True)
+
+app.mount(
+    "/telegram_photos",
+    StaticFiles(directory="Telegram_photos"),
+    name="telegram_photos"
+)
+
+
+
 # Request Model
 
 class EmailRequest(BaseModel):
@@ -74,20 +95,30 @@ async def search_zehef(request: EmailRequest):
     return JSONResponse(status_code=200, content=result)
 
 
-# 🔹 *Telegram API*
-@app.post("/api/telegram/")
-async def search_telegram(request: PhoneRequest):
-    phone_number = request.phone.strip()
-    if not phone_number:
-        raise HTTPException(status_code=400, detail="Phone number is required.")
+
+# ================= TELEGRAM API =================
+@app.post("/api/telegram")
+async def telegram_api(request: PhoneRequest):
+    phone = request.phone.strip()
+
+    if not phone.startswith("+"):
+        raise HTTPException(
+            status_code=400,
+            detail="Phone number must include country code (e.g. +919XXXXXXXXX)"
+        )
 
     try:
-        result = await check_telegram_number(phone_number)
-        logger.debug(result)
+        result = await lookup_telegram_user(phone)
         return JSONResponse(status_code=200, content=result)
+
     except Exception as e:
-        logger.error(f"Telegram check failed for {phone_number}: {e}")
-        return {"status": "error", "message": "Failed to check Telegram number."}
+        logger.exception(f"Telegram lookup failed for {phone}: {e}")
+        raise HTTPException(status_code=500, detail="Telegram lookup failed")
+
+# ================= VALIDATION HANDLER =================
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    return await request_validation_exception_handler(request, exc)
 
 
 # 🔹 **Email Check API**
@@ -172,7 +203,7 @@ async def gmail_search(request: EmailRequest):
         raise HTTPException(status_code=500,detail=result["error"])
     
     person_id = result.get("data", {}).get("PROFILE_CONTAINER", {}).get("profile", {}).get("personId")
-    # logger.info(f"Person ID found: {person_id}")
+    logger.info(f"Person ID found: {person_id}")
     if person_id:
         maps_result = await google_maps(GoogleMapsRequest(contributor_id=person_id))
         result["maps_result"] = maps_result
@@ -223,31 +254,6 @@ class PhoneIgRequest(BaseModel):
     phone: str
     country_code: str
 
-@app.post("/api/ignorant")
-async def ignorant_search(request: PhoneIgRequest):
-    phone = request.phone.strip()
-    country_code = request.country_code.strip()
-
-    if not phone or not country_code:
-        raise HTTPException(status_code=400, detail="Phone number and country code are required.")
-
-    try:
-        from ignorant.modules.shopping.amazon import amazon
-        from ignorant.modules.social_media.instagram import instagram
-        from ignorant.modules.social_media.snapchat import snapchat
-
-        out = []
-        async with httpx.AsyncClient() as client:
-            tasks = [
-                amazon(phone, country_code, client, out),
-                instagram(phone, country_code, client, out),
-                snapchat(phone, country_code, client, out),
-            ]
-            await asyncio.gather(*tasks)
-        return JSONResponse(status_code=200, content=out)
-    except Exception as e:
-        logger.error(f"Error in ignorant search for {phone}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 SERP_API_KEY = os.getenv("SERP_API_KEY")
 SERP_API_URL = os.getenv("SERP_API_URL")

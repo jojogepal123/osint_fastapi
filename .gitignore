@@ -6,5 +6,7 @@ zehef.zip
 *.pyc
 *.cpython-313.pyc
 /profile_photos
+/Telegram_photos
 /Zehef
 session.session
+session.session-journal
