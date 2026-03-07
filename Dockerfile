@@ -1,0 +1,39 @@
+# Production
+FROM python:3.11-slim
+
+RUN pip install uv --no-cache-dir
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends wget \
+    && wget -q https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-3/wkhtmltox_0.12.6.1-3.bookworm_amd64.deb \
+    && apt-get install -y ./wkhtmltox_0.12.6.1-3.bookworm_amd64.deb \
+    && rm wkhtmltox_0.12.6.1-3.bookworm_amd64.deb \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV VIRTUAL_ENV=/app/.venv
+ENV PATH="/app/.venv/bin:$PATH"
+
+# Install ghunt first (isolated step — matches reference approach)
+# Then install the rest of the requirements
+COPY requirements.txt .
+RUN uv venv $VIRTUAL_ENV && \
+    uv pip install --python $VIRTUAL_ENV/bin/python ghunt && \
+    uv pip install --python $VIRTUAL_ENV/bin/python -r requirements.txt && \
+    ls $VIRTUAL_ENV/bin/ghunt && \
+    $VIRTUAL_ENV/bin/ghunt --help > /dev/null
+
+ENV GHUNT_ENVIRONMENT_PATH=ghunt
+
+COPY . .
+
+RUN mkdir -p Telegram_photos
+
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+EXPOSE 5000
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5000"]

@@ -199,15 +199,19 @@ async def gmail_search(request: EmailRequest):
     result = await ghunt_runner.run_email_scan(request.email)
     
     if "error" in result:
-        logger.error(f"Error in gmail scan {result["error"]}")
+        logger.error(f"Error in gmail scan {result['error']}")
         raise HTTPException(status_code=500,detail=result["error"])
-    
+
     person_id = result.get("data", {}).get("PROFILE_CONTAINER", {}).get("profile", {}).get("personId")
     logger.info(f"Person ID found: {person_id}")
     if person_id:
-        maps_result = await google_maps(GoogleMapsRequest(contributor_id=person_id))
-        result["maps_result"] = maps_result
-        
+        try:
+            maps_result = await google_maps(GoogleMapsRequest(contributor_id=person_id))
+            result["maps_result"] = maps_result
+        except Exception as e:
+            logger.warning(f"Google Maps lookup failed for contributor {person_id}: {e}")
+            result["maps_result"] = None
+
     return JSONResponse(status_code=200, content=result)
 
 async def email_scan(email):
@@ -246,7 +250,7 @@ async def handle_socialscan(request: EmailRequest):
     result = await email_scan(request.email)
 
     if "error" in result:
-        logger.error(f"Error in gmail scan {result["error"]}")
+        logger.error(f"Error in gmail scan {result['error']}")
         raise HTTPException(status_code=500,detail=result["error"])
     return JSONResponse(status_code=200, content=result)
 
