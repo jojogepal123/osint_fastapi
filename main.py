@@ -30,10 +30,10 @@ ZEHEF_PATH = os.path.join(BASE_DIR, "Zehef")
 # Configure Logging
 logging.basicConfig(
     filename="app.log",
-    level=logging.INFO,
+    level=logging.ERROR,
     format="%(asctime)s - %(levelname)s - %(message)s",
-)  
-logging.getLogger("telethon").setLevel(logging.WARNING)  
+)
+logging.getLogger("telethon").setLevel(logging.ERROR)
 logger = logging.getLogger(__name__)
 
 limiter = Limiter(key_func=get_remote_address)
@@ -55,12 +55,10 @@ async def verify_api_key(key: str = Security(api_key_header)):
 @app.on_event("startup")
 async def startup_event():
     await start_client()
-    logger.info("Telegram client started")
 
 @app.on_event("shutdown")
 async def shutdown_event():
     await stop_client()
-    logger.info("Telegram client stopped")
 
 ghunt_runner = GHuntRunner()
 
@@ -209,9 +207,6 @@ async def check_email(request: Request, data: EmailRequest):
         if unwanted_line in categories["used"]:
              categories["used"].remove(unwanted_line)
 
-        # Log only email and status code
-        logger.info(f"holehe check success for '{data.email}' - Status Code: 200")
-        logger.debug(f"Categories: {categories}")
         return JSONResponse(status_code=200, content=categories)
 
     except Exception as e:
@@ -252,14 +247,11 @@ async def gmail_search(request: Request, body: EmailRequest):
     person_id = (
         api_data.get("PROFILE_CONTAINER", {}).get("profile", {}).get("personId")
     )
-    logger.info(f"Person ID found: {person_id}")
-
     if person_id:
         try:
             maps_result = await google_maps(GoogleMapsRequest(contributor_id=person_id))
             result["maps_result"] = maps_result
         except Exception as e:
-            logger.warning(f"Google Maps lookup failed for contributor {person_id}: {e}")
             result["maps_result"] = None
 
     return JSONResponse(status_code=200, content=result)
