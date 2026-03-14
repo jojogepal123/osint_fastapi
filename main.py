@@ -48,6 +48,11 @@ async def shutdown_event():
 ghunt_runner = GHuntRunner()
 
 
+@app.get("/api/health")
+async def health():
+    return {"status": "ok"}
+
+
 # Mount the folder
 # Mount Telegram photos folder
 if not os.path.exists("Telegram_photos"):
@@ -194,16 +199,40 @@ async def check_email(data: EmailRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+RAPIDAPI_GOOGLE_KEY = os.getenv("RAPIDAPI_GOOGLE_KEY", "")
+
 @app.post("/api/gmail")
 async def gmail_search(request: EmailRequest):
-    result = await ghunt_runner.run_email_scan(request.email)
-    
-    if "error" in result:
-        logger.error(f"Error in gmail scan {result['error']}")
-        raise HTTPException(status_code=500,detail=result["error"])
+    if not RAPIDAPI_GOOGLE_KEY:
+        raise HTTPException(status_code=500, detail="RAPIDAPI_GOOGLE_KEY is not configured.")
 
-    person_id = result.get("data", {}).get("PROFILE_CONTAINER", {}).get("profile", {}).get("personId")
+    url = f"https://google-data.p.rapidapi.com/email/{request.email}"
+    headers = {
+        "x-rapidapi-key": RAPIDAPI_GOOGLE_KEY,
+        "x-rapidapi-host": "google-data.p.rapidapi.com",
+    }
+    params = {"noReviews": "true", "cached": "false"}
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.get(url, headers=headers, params=params)
+            response.raise_for_status()
+            api_data = response.json()
+    except httpx.HTTPStatusError as e:
+        logger.error(f"RapidAPI HTTP error for {request.email}: {e.response.status_code} {e.response.text}")
+        raise HTTPException(status_code=e.response.status_code, detail=f"RapidAPI error: {e.response.text}")
+    except Exception as e:
+        logger.exception(f"RapidAPI request failed for {request.email}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    result = {"data": api_data}
+
+    # Extract personId from PROFILE_CONTAINER.profile.personId
+    person_id = (
+        api_data.get("PROFILE_CONTAINER", {}).get("profile", {}).get("personId")
+    )
     logger.info(f"Person ID found: {person_id}")
+
     if person_id:
         try:
             maps_result = await google_maps(GoogleMapsRequest(contributor_id=person_id))
