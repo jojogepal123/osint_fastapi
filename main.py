@@ -1,10 +1,14 @@
-import sys, uuid
+import sys, uuid, secrets
 import os, requests
 import logging
 import asyncio
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Security, Depends
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.security import APIKeyHeader
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 from pydantic import BaseModel, EmailStr
 from fastapi.exceptions import RequestValidationError
 from fastapi.exception_handlers import request_validation_exception_handler
@@ -16,7 +20,6 @@ import pdfkit
 from pathlib import Path
 import json, tempfile
 import httpx
-# 🔹 Telegram imports (CORRECT)
 from telegram import start_client, stop_client, lookup_telegram_user
 
 # Get absolute paths
@@ -33,7 +36,21 @@ logging.basicConfig(
 logging.getLogger("telethon").setLevel(logging.WARNING)  
 logger = logging.getLogger(__name__)
 
+limiter = Limiter(key_func=get_remote_address)
 app = FastAPI()
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# ── API Key Auth ──────────────────────────────────────────────────────────────
+API_KEY = os.getenv("API_KEY", "")
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+async def verify_api_key(key: str = Security(api_key_header)):
+    if not API_KEY:
+        raise HTTPException(status_code=500, detail="API_KEY is not configured on the server.")
+    if not key or not secrets.compare_digest(key, API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key.")
+# ─────────────────────────────────────────────────────────────────────────────
 
 @app.on_event("startup")
 async def startup_event():
@@ -74,11 +91,12 @@ class EmailRequest(BaseModel):
 class PhoneRequest(BaseModel):
     phone : str
 
-@app.post("/api/zehef/")
-async def search_zehef(request: EmailRequest):
+@app.post("/api/zehef/", dependencies=[Depends(verify_api_key)])
+@limiter.limit("20/minute")
+async def search_zehef(request: Request, body: EmailRequest):
     """API Endpoint to check an email using Zehef"""
 
-    email = request.email.strip()
+    email = body.email.strip()
     if not email:
         raise HTTPException(status_code=400, detail="Email is required.")
 
@@ -102,9 +120,10 @@ async def search_zehef(request: EmailRequest):
 
 
 # ================= TELEGRAM API =================
-@app.post("/api/telegram")
-async def telegram_api(request: PhoneRequest):
-    phone = request.phone.strip()
+@app.post("/api/telegram", dependencies=[Depends(verify_api_key)])
+@limiter.limit("10/minute")
+async def telegram_api(request: Request, body: PhoneRequest):
+    phone = body.phone.strip()
 
     if not phone.startswith("+"):
         raise HTTPException(
@@ -140,8 +159,9 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     # Return standard 422 response
     return await request_validation_exception_handler(request, exc)
 
-@app.post("/api/holehe/")
-async def check_email(data: EmailRequest):
+@app.post("/api/holehe/", dependencies=[Depends(verify_api_key)])
+@limiter.limit("10/minute")
+async def check_email(request: Request, data: EmailRequest):
     try:
         proc = await asyncio.create_subprocess_exec(
             "holehe", data.email,
@@ -201,12 +221,13 @@ async def check_email(data: EmailRequest):
 
 RAPIDAPI_GOOGLE_KEY = os.getenv("RAPIDAPI_GOOGLE_KEY", "")
 
-@app.post("/api/gmail")
-async def gmail_search(request: EmailRequest):
+@app.post("/api/gmail", dependencies=[Depends(verify_api_key)])
+@limiter.limit("20/minute")
+async def gmail_search(request: Request, body: EmailRequest):
     if not RAPIDAPI_GOOGLE_KEY:
         raise HTTPException(status_code=500, detail="RAPIDAPI_GOOGLE_KEY is not configured.")
 
-    url = f"https://google-data.p.rapidapi.com/email/{request.email}"
+    url = f"https://google-data.p.rapidapi.com/email/{body.email}"
     headers = {
         "x-rapidapi-key": RAPIDAPI_GOOGLE_KEY,
         "x-rapidapi-host": "google-data.p.rapidapi.com",
@@ -219,10 +240,10 @@ async def gmail_search(request: EmailRequest):
             response.raise_for_status()
             api_data = response.json()
     except httpx.HTTPStatusError as e:
-        logger.error(f"RapidAPI HTTP error for {request.email}: {e.response.status_code} {e.response.text}")
+        logger.error(f"RapidAPI HTTP error for {body.email}: {e.response.status_code} {e.response.text}")
         raise HTTPException(status_code=e.response.status_code, detail=f"RapidAPI error: {e.response.text}")
     except Exception as e:
-        logger.exception(f"RapidAPI request failed for {request.email}: {e}")
+        logger.exception(f"RapidAPI request failed for {body.email}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
     result = {"data": api_data}
@@ -274,9 +295,10 @@ async def email_scan(email):
             if os.path.exists(output_path):
                 os.remove(output_path)
 
-@app.post("/api/socialscan")
-async def handle_socialscan(request: EmailRequest):
-    result = await email_scan(request.email)
+@app.post("/api/socialscan", dependencies=[Depends(verify_api_key)])
+@limiter.limit("20/minute")
+async def handle_socialscan(request: Request, body: EmailRequest):
+    result = await email_scan(body.email)
 
     if "error" in result:
         logger.error(f"Error in gmail scan {result['error']}")

@@ -1,13 +1,37 @@
-/.env
-/app.log
-/venv
-/__pycache__
-zehef.zip
-*.pyc
-*.cpython-313.pyc
-/profile_photos
-/Telegram_photos
-/Zehef
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+app.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Secrets / sessions
 session.session
 session.session-journal
 ghunt_runner.py
+ghunt/
+
+# Generated / runtime data
+Telegram_photos/
+profile_photos/
+Zehef/
+zehef.zip
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Claude Code
+.claude/
