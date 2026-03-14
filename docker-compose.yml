@@ -1,0 +1,30 @@
+# FastAPI microservice — standalone production deployment
+# Deploy this to a dedicated VPS/server.
+#
+# Before starting:
+#   1. Copy .env.example → .env and fill in API keys
+#   2. Generate Telegram session on the host first:
+#        python -c "from telethon.sync import TelegramClient; TelegramClient('session', API_ID, API_HASH).start()"
+#   3. After first `docker compose up`, run GHunt OAuth once:
+#        docker compose exec python ghunt login
+#
+# On your main server, set FASTAPI_URL=http://<this-server-ip>:5000
+
+services:
+  python:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: osint-python
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "5000:5000"
+    volumes:
+      - telegram_photos:/app/Telegram_photos   # persists downloaded Telegram photos
+      - ghunt_config:/app/ghunt                # GHunt OAuth credentials
+      - ./session.session:/app/session.session # Telethon session (must exist before start)
+
+volumes:
+  telegram_photos:
+  ghunt_config:

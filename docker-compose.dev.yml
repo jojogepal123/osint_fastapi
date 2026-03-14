@@ -1,0 +1,27 @@
+# FastAPI microservice — standalone development
+# Run with:  docker compose -f docker-compose.dev.yml up -d --build
+#
+# Exposes port 5000 on your host.
+# Your main dev stack (docker-compose.dev.yml) reaches it via host.docker.internal:5000
+
+services:
+  python:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: osint-python-dev
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "5000:5000"
+    volumes:
+      - telegram_photos:/app/Telegram_photos
+      - ghunt_config:/app/ghunt
+      - ./session.session:/app/session.session
+      - .:/app              # bind-mount source for --reload live reload
+      - venv_dev:/app/.venv # named volume keeps the Linux venv separate from host
+
+volumes:
+  telegram_photos:
+  ghunt_config:
+  venv_dev:
