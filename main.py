@@ -48,8 +48,9 @@ api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 async def verify_api_key(key: str = Security(api_key_header)):
     if not API_KEY:
         raise HTTPException(status_code=500, detail="API_KEY is not configured on the server.")
-    if not key or not secrets.compare_digest(key, API_KEY):
-        logger.error("API key mismatch — received: %r, expected: %r", key, API_KEY)
+    match = bool(key and secrets.compare_digest(key, API_KEY))
+    logger.error("[AUTH] received key: %r | expected key: %r | match: %s", key, API_KEY, match)
+    if not match:
         raise HTTPException(status_code=401, detail="Invalid or missing API key.")
 # ─────────────────────────────────────────────────────────────────────────────
 
