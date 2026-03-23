@@ -217,6 +217,13 @@ async def check_email(request: Request, data: EmailRequest):
 
 
 RAPIDAPI_GOOGLE_KEY = os.getenv("RAPIDAPI_GOOGLE_KEY", "")
+SIGNALHIRE_API_KEY = os.getenv("SIGNALHIRE_API_KEY", "")
+FASTAPI_BASE_URL = os.getenv("FASTAPI_BASE_URL", "")  # public URL of this FastAPI instance
+
+# ── SignalHire async callback state ───────────────────────────────────────────
+_sh_events: Dict[str, asyncio.Event] = {}
+_sh_results: Dict[str, Any] = {}
+# ─────────────────────────────────────────────────────────────────────────────
 
 @app.post("/api/gmail", dependencies=[Depends(verify_api_key)])
 @limiter.limit("20/minute")
@@ -358,3 +365,92 @@ async def google_maps(request: GoogleMapsRequest):
         "contributor_id": request.contributor_id,
         "reviews": extracted_reviews
     }
+
+
+# ================= SIGNALHIRE API =================
+
+class SignalHireRequest(BaseModel):
+    items: List[str]  # LinkedIn URLs, emails, or phone numbers
+
+
+@app.post("/api/signalhire/search", dependencies=[Depends(verify_api_key)])
+@limiter.limit("10/minute")
+async def signalhire_search(request: Request, body: SignalHireRequest):
+    """
+    Submit items (phone / email / LinkedIn URL) to SignalHire.
+    Waits up to 60 s for SignalHire's async callback, then returns results.
+    """
+    if not SIGNALHIRE_API_KEY:
+        return JSONResponse(status_code=200, content={"requestId": None, "results": None})
+    if not FASTAPI_BASE_URL or FASTAPI_BASE_URL == "https://your-public-fastapi-domain.com":
+        return JSONResponse(status_code=200, content={"requestId": None, "results": None})
+    if not body.items:
+        raise HTTPException(status_code=400, detail="items list must not be empty.")
+
+    # Generate a unique session key so the callback URL carries it
+    session_key = str(uuid.uuid4())
+    callback_url = f"{FASTAPI_BASE_URL.rstrip('/')}/api/signalhire/callback/{session_key}"
+
+    # Submit search to SignalHire
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            sh_response = await client.post(
+                "https://www.signalhire.com/api/v1/candidate/search",
+                headers={
+                    "apikey": SIGNALHIRE_API_KEY,
+                    "Content-Type": "application/json",
+                },
+                json={"items": body.items, "callbackUrl": callback_url},
+            )
+    except httpx.RequestError as e:
+        logger.exception(f"SignalHire request failed: {e}")
+        raise HTTPException(status_code=503, detail=f"Could not reach SignalHire: {e}")
+
+    if sh_response.status_code != 201:
+        logger.error(f"SignalHire error {sh_response.status_code}: {sh_response.text}")
+        raise HTTPException(
+            status_code=sh_response.status_code,
+            detail=f"SignalHire error: {sh_response.text}",
+        )
+
+    signalhire_request_id = sh_response.json().get("requestId")
+
+    # Wait for SignalHire to POST results to our callback endpoint
+    event = asyncio.Event()
+    _sh_events[session_key] = event
+
+    try:
+        await asyncio.wait_for(event.wait(), timeout=60)
+        results = _sh_results.pop(session_key, [])
+        return JSONResponse(
+            status_code=200,
+            content={"requestId": signalhire_request_id, "results": results},
+        )
+    except asyncio.TimeoutError:
+        logger.warning(f"SignalHire callback timed out for session {session_key}")
+        raise HTTPException(status_code=504, detail="SignalHire callback timed out.")
+    finally:
+        _sh_events.pop(session_key, None)
+
+
+@app.post("/api/signalhire/callback/{session_key}")
+async def signalhire_callback(session_key: str, request: Request):
+    """
+    Called by SignalHire servers with candidate results.
+    No API-key auth — SignalHire does not support custom headers on callbacks.
+    """
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload from SignalHire.")
+
+    _sh_results[session_key] = data
+
+    event = _sh_events.get(session_key)
+    if event:
+        event.set()
+    else:
+        # Callback arrived after timeout — just discard
+        logger.warning(f"SignalHire callback for unknown/expired session: {session_key}")
+
+    return JSONResponse(status_code=200, content={"ok": True})
